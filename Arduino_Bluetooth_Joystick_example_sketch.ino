@@ -11,7 +11,8 @@
 #define L293D_B       3   //B pin of motor driver (L293D)
 #define L293D_EN      11  //EN pin of motor driver (L293D)
 #define L293D_EN_MAX  255 //Maximum PWM value on L293D EN pin. It can be decreased if a maximum spped limit is desired.
-#define SERVO         10  //Servo control pin 
+#define SERVO         10  //Servo control pin
+#define LED           13  // LED pin
 
 //Default parameter definitions
 #define SERVO_LEFT_POSITION   0     //Value representing the left position of the servo (may require some tweeking)
@@ -20,14 +21,20 @@
 #define RANGE_FROM            0     //Set to the value selected in app settings (Settings->Joystick Value Range) 
 #define RANGE_TO              1024  //Set to the value selected in app settings (Settings->Joystick Value Range)
 
+//Bluetooth packet size definitions
+#define SPEED_PACKET_SIZE     7     //Speed packet size
+#define DIRECTION_PACKET_SIZE 7     //Direction packet size
+#define BUTTON_PACKET_SIZE    4     //Button packet size
+
 Servo myservo; //Create a servo object 
 
 int timeout_counter = 0; //Counter used for counting the time since the last received packet
+bool ledOn = false;
 
 //setup
 void setup() {
-  Serial.begin(9600);     //Begin serial for interfacing with HC-05
-  setPwmFrequency(L293D_EN, 1); //Set PWM frequency of the EN pin to 32768Hz (above the frequency a human can hear, otherwise the motor is generating some noise). This function can be commented out or removed if this feature is not desired
+  Serial.begin(9600);     //Begin serial for interfacing with HC-05, make sure to configure HC-05 to this baud rate
+  pinMode(LED, OUTPUT);
   motorInitialize();      //Initialize the motor
   myservo.attach(SERVO);  //Attach a servo object
   myservo.write(SERVO_MIDDLE_POSITION); //Put servo to the middle position
@@ -37,7 +44,7 @@ void setup() {
 //main loop
 void loop() {
   if(Serial.available()){ //Check if there is serial data ready to be read
-    while(Serial.available()) handleSerial(Serial.read()); //If there is data ready to be read, pass the first character to the handleSerial function 
+    while(Serial.available()) handleSerial(Serial.peek()); //If there is data ready to be read, pass the first character to the handleSerial function
     timeout_counter = 0; //Reset the counter when a packet is received
   }
   else{  
@@ -52,31 +59,90 @@ void loop() {
 }
 
 void handleSerial(char c){
-  switch(c){  //The first received character defines the packet type (speed, direction)
-      case 'S':{  //'S' indicates that the speed packet was received
-        int y = Serial.parseInt(); //Parse the speed
-        if(Serial.read() == 13){  //Check if the packet is complete, each packet ends with "\r\n" (13 and 10 in ANSII)
-          if(Serial.read() == 10){
-            motorDrive(y); //If the packet is valid, drive the motor
-          }
-          else while(Serial.available()) Serial.read(); //Clear the Serial buffer if the packet is invalid
+  switch(c){  //The first received character defines the packet type (speed, direction, button)
+    case 'S':  //'S' indicates that the speed packet was received
+    {
+      if(Serial.available() < SPEED_PACKET_SIZE) break; // Speed packet not fully received break and wait for it
+      int y = Serial.parseInt(); //Parse the speed
+      if(Serial.read() == 13){  //Check if the packet is complete, each packet ends with "\r\n" (13 and 10 in ANSII)
+        if(Serial.read() == 10){
+          motorDrive(y); //If the packet is valid, drive the motor
         }
-        else while(Serial.available()) Serial.read(); //Clear the Serial buffer if the packet is invalid
-        break;
+        else clearSerialBuffer(); //Clear the Serial buffer if the packet is invalid
       }
-      case 'D':{  //'D' indicates that the direction packet was received
-        int x = Serial.parseInt(); //Read the direction (the received direction value is between 0 and 500)
-        if(Serial.read() == 13){ //Check if the packet is complete, each packet ends with "\r\n" (13 and 10 in ANSII)
-          if(Serial.read() == 10){
-            servoDrive(x); //If the packet is valid, drive servo
-          }
-          else while(Serial.available()) Serial.read(); //Clear the Serial buffer if the packet is invalid
+      else clearSerialBuffer(); //Clear the Serial buffer if the packet is invalid
+    } break;
+    case 'D':  //'D' indicates that the direction packet was received
+    {
+      if(Serial.available() < DIRECTION_PACKET_SIZE) break; // Direction packet not fully received break and wait for it
+      int x = Serial.parseInt(); //Read the direction (the received direction value is between 0 and RANGE_TO)
+      if(Serial.read() == 13){ //Check if the packet is complete, each packet ends with "\r\n" (13 and 10 in ANSII)
+        if(Serial.read() == 10){
+          servoDrive(x); //If the packet is valid, drive servo
         }
-        else while(Serial.available()) Serial.read(); //Clear the Serial buffer if the packet is invalid
-        break;
+        else clearSerialBuffer; //Clear the Serial buffer if the packet is invalid
       }
+      else clearSerialBuffer();//Clear the Serial buffer if the packet is invalid
+    } break;
+    case 'B':  //'B' indicates that a button packet was received
+    {
+      if(Serial.available() < BUTTON_PACKET_SIZE) break; // Button packet not fully received break and wait for it
+      switch(Serial.parseInt()){
+        case 1: //Button 1 pressed
+        {
+          if(Serial.read() == 13){
+            if(Serial.read() == 10){
+              onButton1Press();
+            }
+          } 
+        } break;
+        case 2: //Button 2 pressed
+        {
+          if(Serial.read() == 13){
+            if(Serial.read() == 10){
+              onButton2Press(); 
+            }
+          } 
+        } break;
+        case 3: //Button 3 pressed
+        {
+          if(Serial.read() == 13){
+            if(Serial.read() == 10){
+              onButton3Press();
+            }
+          } 
+        } break;
+        default: //Unrecognized button command
+        {
+          clearSerialBuffer();
+        } break;
+      } 
+    } break;
+    default: // Unrecognized packet
+    {
+      clearSerialBuffer();
+    } break;
   }
-}  
+}
+
+void clearSerialBuffer(){
+  while(Serial.available()){
+    Serial.read();
+  }
+}
+
+void onButton1Press(){
+  ledOn = !ledOn;
+  digitalWrite(LED, ledOn);
+}
+
+void onButton2Press(){
+  // Your custom code on button 2 press
+}
+
+void onButton3Press(){
+    // Your custom code on button 3 press
+}
   
 void servoDrive(int x){
   x = map(x, RANGE_FROM, RANGE_TO, SERVO_LEFT_POSITION, SERVO_RIGHT_POSITION); //Map the received data according to your servo parameters
@@ -85,6 +151,7 @@ void servoDrive(int x){
 
 //Initialise pins for driving L293D IC  
 void motorInitialize(){
+  setPwmFrequency(L293D_EN, 1); //Set PWM frequency of the EN pin to 32768Hz (above the frequency a human can hear, otherwise the motor is generating some noise). This function can be commented out or removed if this feature is not desired
   pinMode (L293D_A, OUTPUT);
   pinMode (L293D_B, OUTPUT);
   digitalWrite(L293D_A, 0);
